@@ -1,4 +1,4 @@
-name: Wiehl Stadtduell APK
+name: Wiehl Online APK
 on:
   push:
     branches: [wiehl-stadtduell-android]
@@ -25,6 +25,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+      - name: Bundle pinned PeerJS client
+        run: |
+          npm pack --ignore-scripts --silent --pack-destination /tmp peerjs@1.5.5
+          tar -xOf /tmp/peerjs-1.5.5.tgz package/dist/peerjs.min.js > wiehl/app/src/main/assets/peerjs.min.js
+          tar -xOf /tmp/peerjs-1.5.5.tgz package/LICENSE > wiehl/app/src/main/assets/PeerJS-LICENSE.txt
+          test -s wiehl/app/src/main/assets/peerjs.min.js
       - name: Verify original game JavaScript
         working-directory: wiehl
         run: |
@@ -38,13 +44,15 @@ jobs:
           pathlib.Path('/tmp/wiehl-game.js').write_text(script, encoding='utf-8')
           PY
           node --check /tmp/wiehl-game.js
+          node --check app/src/main/assets/online.js
+          node --check app/src/main/assets/peerjs.min.js
       - name: Build standalone APK
         working-directory: wiehl
         run: gradle --no-daemon :app:assembleDebug
       - name: Prepare download
-        run: cp wiehl/app/build/outputs/apk/debug/app-debug.apk Wiehl-51674.apk
+        run: cp wiehl/app/build/outputs/apk/debug/app-debug.apk Wiehl-51674-Online.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: Wiehl-51674-APK
-          path: Wiehl-51674.apk
+          name: Wiehl-51674-Online-APK
+          path: Wiehl-51674-Online.apk
           if-no-files-found: error

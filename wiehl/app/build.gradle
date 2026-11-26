@@ -3,11 +3,11 @@ android {
     namespace 'de.wiehl.stadtduell'
     compileSdk 35
     defaultConfig {
-        applicationId 'de.wiehl.stadtduell'
+        applicationId 'de.wiehl.stadtduell.online'
         minSdk 23
         targetSdk 34
         versionCode 1
-        versionName '1.0'
+        versionName '1.1-online'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17

@@ -35,6 +35,20 @@ public class MainActivity extends Activity {
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 String scheme = request.getUrl().getScheme();
+                String host = request.getUrl().getHost();
+                String path = request.getUrl().getPath();
+                if ("https".equals(scheme) && "appassets.androidplatform.net".equals(host)) {
+                    if ("/".equals(path) || "/index.html".equals(path)) {
+                        try { return new WebResourceResponse("text/html", "UTF-8", getAssets().open("index.html")); }
+                        catch (Exception ignored) {}
+                    }
+                    if ("/online.js".equals(path) || "/peerjs.min.js".equals(path)) {
+                        try {
+                            return new WebResourceResponse("application/javascript", "UTF-8", getAssets().open(path.substring(1)));
+                        } catch (Exception ignored) {}
+                    }
+                }
+                if ("https".equals(scheme) && "0.peerjs.com".equals(host)) return null;
                 if ("https".equals(scheme) || "http".equals(scheme)) {
                     return new WebResourceResponse("text/plain", "UTF-8", new ByteArrayInputStream(new byte[0]));
                 }
@@ -42,16 +56,7 @@ public class MainActivity extends Activity {
             }
         });
         setContentView(game);
-        try (InputStream input = getAssets().open("index.html");
-             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[8192];
-            int count;
-            while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
-            String html = new String(output.toByteArray(), StandardCharsets.UTF_8);
-            game.loadDataWithBaseURL(ORIGIN, html, "text/html", "UTF-8", null);
-        } catch (Exception e) {
-            game.loadData("<html><body>Das Spiel konnte nicht geladen werden.</body></html>", "text/html", "UTF-8");
-        }
+        game.loadUrl(ORIGIN+"index.html");
     }
 
     @Override public void onBackPressed() {

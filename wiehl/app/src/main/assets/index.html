@@ -103,12 +103,20 @@ body{background:linear-gradient(130deg,#091714d9,#091714eb),var(--wiehl-photo) c
 .art::after{z-index:1;inset:5px}
 @media(max-width:690px){.art-title{font-size:11vw}.art-sub{font-size:2.15vw}}
 </style>
+<style>
+.online-bar{max-width:1290px;margin:0 auto;padding:10px 12px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.online-bar button{min-height:40px}.online-bar span{font-size:12px;color:var(--muted);flex:1}
+#online-dialog{max-height:90vh;overflow:auto}#online-dialog h2{margin-bottom:10px}#online-dialog .online-section{border-top:1px solid var(--line);margin-top:14px;padding-top:12px}
+#online-dialog .room-code{font-size:20px;font-weight:800;letter-spacing:.14em;text-align:center;color:var(--gold)}
+#online-dialog .primary{min-height:44px}#online-dialog [hidden]{display:none!important}#online-dialog #online-message{min-height:2em;margin-top:8px;overflow-wrap:anywhere}
+</style>
 </head>
 <body>
 <header><div class="header-inner">
   <div class="brand"><span class="seal" aria-hidden="true">W</span><div><div class="brand-name">Wiehl</div><div class="brand-sub">51674 · Das Stadtduell</div></div></div>
   <div class="header-actions"><button id="rules-button" class="outline" type="button">Regeln</button><button id="new-button" class="outline" type="button">Neues Spiel</button></div>
 </div></header>
+<div class="online-bar"><button class="outline" id="online-button" type="button">Online spielen</button><span id="online-status">Lokal · zwei Personen auf einem Gerät</span></div>
 <main>
   <section class="board-frame" aria-label="Spielfeld"><div id="board">
     <div class="art"><div class="art-title">Wiehl</div><div class="art-sub">51674 · Das Stadtduell</div></div>
@@ -149,6 +157,16 @@ body{background:linear-gradient(130deg,#091714d9,#091714eb),var(--wiehl-photo) c
   <label>Spieler 2<input name="second" maxlength="22" value="Spieler 2" required></label>
   <div class="actions"><button class="primary" type="submit">Duell starten</button><button id="cancel-new" type="button" class="small">Abbrechen</button></div>
  </form>
+</dialog>
+<dialog id="online-dialog">
+<h2 class="panel-head">Online-Duell</h2>
+<p id="online-message" aria-live="polite">Spielt auf zwei Handys. Beide brauchen Internet und dieselbe Online-App.</p>
+<div id="online-setup">
+<div class="online-section"><strong>Spiel eröffnen</strong><label>Dein Name<input id="online-host-name" maxlength="22" value="Spieler 1"></label><button class="primary" id="online-create" type="button" style="margin-top:10px">Spielcode erstellen</button></div>
+<div class="online-section"><strong>Spiel beitreten</strong><label>Dein Name<input id="online-guest-name" maxlength="22" value="Spieler 2"></label><label>Spielcode<input id="online-join-code" maxlength="10" placeholder="ABC234DEFG" autocapitalize="characters" autocomplete="off" spellcheck="false"></label><button class="primary" id="online-join" type="button" style="margin-top:10px">Verbinden</button></div>
+</div>
+<div id="online-room" hidden><label>Privater Spielcode<input class="room-code" id="online-room-code" readonly></label><div class="actions"><button class="small" id="online-copy" type="button">Code kopieren</button><button class="small" id="online-leave" type="button">Online-Spiel verlassen</button></div><p style="margin-top:10px">Teile den Code nur mit deinem Mitspieler. Der Spielstand liegt während des Duells beim Gastgeber. Bleibt beide in der App.</p></div>
+<div class="actions"><button class="outline" type="button" id="online-close">Zurück zum Spiel</button></div>
 </dialog>
 <script>
 'use strict';
@@ -501,5 +519,7 @@ $('setup').addEventListener('submit',event=>{
 setupBoard();
 render();
 </script>
+<script src="peerjs.min.js"></script>
+<script src="online.js"></script>
 </body>
 </html>
