@@ -1,0 +1,30 @@
+name: Build LAB X APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure icon
+        run: |
+          test -f icon.png
+          sed -i '/^icon.filename/d' buildozer.spec
+          sed -i '/^\[app\]/a icon.filename = icon.png' buildozer.spec
+
+      - name: Build Android APK
+        uses: ArtemSBulgakov/buildozer-action@v1
+        with:
+          command: buildozer android debug
+          buildozer_version: stable
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LAB-X-APK
+          path: bin/*.apk
