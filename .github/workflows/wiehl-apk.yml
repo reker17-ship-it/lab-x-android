@@ -1,0 +1,49 @@
+name: Wiehl Stadtduell APK
+on:
+  push:
+    branches: [wiehl-stadtduell-android]
+    paths:
+      - 'wiehl/**'
+      - '.github/workflows/wiehl-apk.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Verify original game JavaScript
+        working-directory: wiehl
+        run: |
+          python3 - <<'PY'
+          import re, pathlib, base64
+          html = pathlib.Path('app/src/main/assets/index.html').read_text(encoding='utf-8')
+          assert 'ART_DATA' not in html
+          image = re.search(r'data:image/webp;base64,([A-Za-z0-9+/=]+)', html)
+          assert base64.b64decode(image.group(1), validate=True).startswith(b'RIFF')
+          script = re.search(r'<script>(.*?)</script>', html, re.S).group(1)
+          pathlib.Path('/tmp/wiehl-game.js').write_text(script, encoding='utf-8')
+          PY
+          node --check /tmp/wiehl-game.js
+      - name: Build standalone APK
+        working-directory: wiehl
+        run: gradle --no-daemon :app:assembleDebug
+      - name: Prepare download
+        run: cp wiehl/app/build/outputs/apk/debug/app-debug.apk Wiehl-51674.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Wiehl-51674-APK
+          path: Wiehl-51674.apk
+          if-no-files-found: error
