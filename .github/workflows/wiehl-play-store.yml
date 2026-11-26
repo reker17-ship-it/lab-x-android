@@ -52,8 +52,17 @@ jobs:
       - name: Make store graphics
         working-directory: wiehl
         run: |
-          python3 -m pip install --user Pillow==11.3.0
-          python3 store/make_graphics.py
+          python3 -m venv "$RUNNER_TEMP/wiehl-graphics"
+          "$RUNNER_TEMP/wiehl-graphics/bin/pip" install Pillow==11.3.0
+          "$RUNNER_TEMP/wiehl-graphics/bin/python" store/make_graphics.py
+      - name: Test full local game in Chromium and capture previews
+        working-directory: wiehl
+        env:
+          WIEHL_PLAYWRIGHT: ${{ runner.temp }}/wiehl-browser/node_modules/playwright
+        run: |
+          npm install --prefix "$RUNNER_TEMP/wiehl-browser" --no-audit --no-fund playwright@1.51.1
+          "$RUNNER_TEMP/wiehl-browser/node_modules/.bin/playwright" install --with-deps chromium
+          node store/smoke.cjs
       - name: Prepare files
         run: |
           mkdir -p play-store-candidate
