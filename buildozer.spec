@@ -5,7 +5,7 @@ package.domain = org.reker17
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,json,wav
 version = 4.1
-requirements = python3,kivy,pyjnius,plyer,numpy,openssl
+requirements = python3==3.11.14,hostpython3==3.11.14,kivy,pyjnius,plyer,numpy,openssl
 orientation = portrait
 fullscreen = 0
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,ACCESS_WIFI_STATE,ACCESS_COARSE_LOCATION,ACCESS_FINE_LOCATION,RECORD_AUDIO,ACTIVITY_RECOGNITION
