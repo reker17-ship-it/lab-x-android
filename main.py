@@ -148,10 +148,16 @@ class Lab(App):
 
 # Additional Android sensor types (scalar or three-axis measurements).
 SENSORS.update({14:('Magnetfeld unkalibriert','µT',3),16:('Gyroskop unkalibriert','rad/s',3),18:('Schritterkennung','Ereignis',1),
-  21:('Herzfrequenz','bpm',1),28:('Pose-Bewegung','Ereignis',1),34:('Herzschlag-Konfidenz','Wert',1),35:('Beschleunigung unkalibriert','m/s²',3),
+  21:('Herzfrequenz','bpm',1),28:('Pose-Bewegung','Ereignis',1),31:('Herzschlag-Konfidenz','Wert',1),35:('Beschleunigung unkalibriert','m/s²',3),
   29:('Stationär','Ereignis',1),30:('Bewegung erkannt','Ereignis',1)})
 # Trigger-only and pose sensors require other APIs; do not register them here.
 for k in (28,29,30): SENSORS.pop(k,None)
+SENSOR_PERMISSIONS = {
+    SENSORS[k][0]: (k, 'android.permission.ACTIVITY_RECOGNITION', 29) for k in (18, 19)
+}
+SENSOR_PERMISSIONS.update({
+    SENSORS[k][0]: (k, 'android.permission.BODY_SENSORS', 24) for k in (21, 31)
+})
 EXTRA.update({'Akku-Leistung':'W','Akku-Ladungszähler':'mAh','Akku-Energie':'Wh','Akku-Strom Mittel':'mA',
  'WLAN-Frequenz':'MHz','WLAN-Linkrate':'Mbit/s','WLAN-Kanal':'Kanal','RAM frei':'MiB','RAM gesamt':'MiB',
  'Speicher frei':'GiB','Speicher gesamt':'GiB','CPU-Kerne':'Anzahl','Systemlaufzeit':'h','Bildschirmhelligkeit':'% (Einstellung)',
@@ -219,17 +225,41 @@ class Omega(Lab):
         if a: self.values['Neigung gesamt']=(math.degrees(math.atan2(math.hypot(a[0],a[1]),a[2])),)
         a=self.values.get('Lineare Beschleunigung')
         if a: self.values['Dynamische Beschleunigung']=(self.scalar(a),)
+    def change(self, *args):
+        super().change(*args)
+        protected = SENSOR_PERMISSIONS.get(self.selector.text)
+        if not protected or not self.manager or not self.listener:
+            return
+        sensor_type, permission, min_api = protected
+        if self.ac('android.os.Build$VERSION').SDK_INT >= min_api:
+            sensor = self.manager.getDefaultSensor(sensor_type)
+            if sensor:
+                self.permissions([permission], lambda: self.manager.registerListener(self.listener, sensor, 3))
+
     def permissions(self,names,fn):
-        # Pydroid: avoid PythonActivity permission callback proxy entirely.
-        try:
-            granted=[name for name in names if self.ctx.checkSelfPermission(name)==0]
-            location='android.permission.ACCESS_COARSE_LOCATION' in names
-            if (location and granted) or len(granted)==len(names):
+        message = 'Erlaube den Zugriff in den Android-Einstellungen unter Apps > LAB X > Berechtigungen.'
+        def granted():
+            results = [self.ctx.checkSelfPermission(name) == 0 for name in names]
+            if 'android.permission.ACCESS_COARSE_LOCATION' in names:
+                return any(results)
+            return all(results)
+
+        def finish(dt):
+            if granted():
                 fn()
-                return
-            self.message('Berechtigung fehlt', 'Android-Einstellungen > Apps > Pydroid 3 > Berechtigungen. Standort bzw. Mikrofon erlauben, dann erneut starten. Falls die Berechtigung nicht angeboten wird, kann Pydroid diese Funktion nicht freigeben.')
+            else:
+                self.message('Berechtigung fehlt', message)
+
+        try:
+            if granted():
+                fn()
+            elif self.ctx.getPackageName() == 'org.reker17.labx':
+                from android.permissions import request_permissions
+                request_permissions(names, lambda *_: Clock.schedule_once(finish))
+            else:
+                self.message('Berechtigung fehlt', 'Erlaube den Zugriff in den Android-Einstellungen für die App, in der LAB X läuft.')
         except Exception as e:
-            self.message('Berechtigung nicht pruefbar',str(e))
+            self.message('Berechtigung nicht prüfbar',str(e))
     def toggle_gps(self,*args):
         if self.gps_active: self.stop_gps(); return
         self.permissions(['android.permission.ACCESS_FINE_LOCATION','android.permission.ACCESS_COARSE_LOCATION'],self.start_gps)
@@ -275,8 +305,9 @@ class Omega(Lab):
                 self.values['Mikrofon RMS']=(20*math.log10(max(rms,1e-6)),); self.values['Mikrofon Peak']=(20*math.log10(max(peak,1e-6)),)
                 try:
                     import numpy as np
-                    x=np.array(a,dtype=float); x-=x.mean(); spec=np.abs(np.fft.rfft(x*np.hanning(len(x)))); k=int(np.argmax(spec[3:])+3)
-                    if rms>.001:self.values['Tonfrequenz']=(k*rate/len(x),)
+                    if rms>.001 and len(a)>=6:
+                        x=np.array(a,dtype=float); x-=x.mean(); spec=np.abs(np.fft.rfft(x*np.hanning(len(x)))); k=int(np.argmax(spec[3:])+3)
+                        self.values['Tonfrequenz']=(k*rate/len(x),)
                     else:self.values.pop('Tonfrequenz',None)
                 except ImportError:self.values.pop('Tonfrequenz',None)
         except Exception as e:
@@ -310,7 +341,7 @@ class Omega(Lab):
 
 
 
-import json, urllib.request, urllib.parse
+import json, ssl, urllib.request, urllib.parse
 from kivy.uix.slider import Slider
 WEATHER = {'temperature_2m':('Außentemperatur','°C'),'relative_humidity_2m':('Außen-Luftfeuchtigkeit','%'),'apparent_temperature':('Gefühlte Temperatur','°C'),'surface_pressure':('Außen-Luftdruck','hPa'),'pressure_msl':('Meeresspiegel-Luftdruck','hPa'),'wind_speed_10m':('Wind','km/h'),'wind_direction_10m':('Windrichtung','°'),'wind_gusts_10m':('Windböen','km/h'),'precipitation':('Niederschlag','mm'),'cloud_cover':('Bewölkung','%'),'weather_code':('Wettercode','WMO'),'is_day':('Tageslicht','0/1')}
 HOURLY={'dew_point_2m':('Taupunkt außen','°C'),'visibility':('Sichtweite','m'),'uv_index':('UV-Index','Index')}
@@ -345,7 +376,13 @@ class GlobalLab(Omega):
         if self.online_busy:return
         self.online_busy=True; place=self.online_place; coords=self.online_coords
         def get(url,params):
-            with urllib.request.urlopen(url+'?'+urllib.parse.urlencode(params),timeout=15) as r:return json.load(r)
+            try:
+                import certifi
+            except ImportError:
+                context = None
+            else:
+                context = ssl.create_default_context(cafile=certifi.where())
+            with urllib.request.urlopen(url+'?'+urllib.parse.urlencode(params),timeout=15,context=context) as r:return json.load(r)
         def worker():
             data={}; stamp=''; errors=[]; pos=coords; name=place
             try:
@@ -383,11 +420,15 @@ class GlobalLab(Omega):
         def filt(*a):self.highpass=not self.highpass;f.text='Hochpass: '+('AN' if self.highpass else 'AUS')
         f.bind(on_release=filt)
         b=Button(text='Monitor START / STOPP',size_hint_y=None,height=dp(48));box.add_widget(b)
+        def start_monitor():
+            if not self.headphones():self.message('Audio','Kabel- oder USB-Kopfhörer anschließen.');return
+            if self.audio_thread and self.audio_thread.is_alive() and not self.audio_running:return
+            self.monitor=True
+            self.start_audio()
         def toggle(*a):
             if self.monitor:self.monitor=False;return
             if not self.headphones():self.message('Audio','Kabel- oder USB-Kopfhörer anschließen.');return
-            self.monitor=True
-            if not self.audio_running:self.toggle_audio()
+            self.permissions(['android.permission.RECORD_AUDIO'],start_monitor)
         b.bind(on_release=toggle);Popup(title='Audio-Labor',content=box,size_hint=(.96,.7)).open()
     def headphones(self):
         try:return any(d.getType() in (3,4,22) for d in self.ctx.getSystemService('audio').getDevices(2))

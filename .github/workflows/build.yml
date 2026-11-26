@@ -4,6 +4,11 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -11,7 +16,9 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Install dependencies
         run: |
@@ -20,7 +27,7 @@ jobs:
             openjdk-17-jdk \
             python3-pip python3-venv \
             git zip unzip autoconf \
-            automake libtool pkg-config \
+            automake libtool libltdl-dev pkg-config patch \
             zlib1g-dev libncurses5-dev \
             libncursesw5-dev libtinfo5 \
             cmake libffi-dev libssl-dev \
@@ -30,23 +37,87 @@ jobs:
         run: |
           python3 -m venv "$HOME/buildenv"
           source "$HOME/buildenv/bin/activate"
-          pip install --upgrade pip
-          pip install buildozer "cython==0.29.36" setuptools
+          pip install buildozer==1.6.0 Cython==0.29.37 setuptools==80.10.2
 
-      - name: Configure icon
+      - name: Prepare python-for-android
         run: |
-          sed -i '/^icon.filename/d' buildozer.spec
-          sed -i '/^\[app\]/a icon.filename = icon.png' buildozer.spec
-          sed -i '/^android.accept_sdk_license/d' buildozer.spec
-          sed -i '/^\[app\]/a android.accept_sdk_license = True' buildozer.spec
+          git clone --depth 1 --branch v2026.05.09 https://github.com/kivy/python-for-android.git "$RUNNER_TEMP/python-for-android"
+          git -C "$RUNNER_TEMP/python-for-android" apply "$GITHUB_WORKSPACE/.github/patches/p4a-pip-venv.patch"
+          echo "APP_P4A_SOURCE_DIR=$RUNNER_TEMP/python-for-android" >> "$GITHUB_ENV"
 
       - name: Build Android APK
         run: |
+          set -o pipefail
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          export PATH="$JAVA_HOME/bin:$PATH"
           source "$HOME/buildenv/bin/activate"
-          buildozer -v android debug
+          python -m py_compile main.py
+          buildozer -v android release 2>&1 | tee "$RUNNER_TEMP/labx-build.log"
+          buildozer -v android debug 2>&1 | tee -a "$RUNNER_TEMP/labx-build.log"
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - name: Report build errors
+        if: failure()
+        run: |
+          if [[ -f "$RUNNER_TEMP/labx-build.log" ]]; then
+            sed -E $'s/\x1b\\[[0-9;]*m//g' "$RUNNER_TEMP/labx-build.log" \
+              | grep -Ei 'fatal error|\[error\]|error:|Traceback|failed to build|No module named|undefined reference|HTTP Error|FAILED:' \
+              | cut -c1-400 | tail -35 || true
+          fi
+
+      - name: Upload installable debug APK
+        uses: actions/upload-artifact@v7
         with:
           name: LAB-X-APK
-          path: bin/*.apk
+          path: bin/*-debug.apk
+          if-no-files-found: error
+
+      - name: Upload unsigned release APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: LAB-X-unsigned-APK
+          path: bin/*-release-unsigned.apk
+          if-no-files-found: error
+
+  android-smoke-test:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: LAB-X-unsigned-APK
+          path: apk
+
+      - name: Sign the release APK for the emulator
+        run: |
+          tools="$ANDROID_HOME/build-tools/35.0.0"
+          if [[ ! -x "$tools/apksigner" ]]; then
+            sdkmanager 'build-tools;35.0.0'
+          fi
+          keytool -genkeypair -alias emulator -keyalg RSA -validity 2 \
+            -dname 'CN=LAB X emulator test' -storetype PKCS12 \
+            -keystore "$RUNNER_TEMP/labx-test.p12" -storepass android
+          "$tools"/zipalign -P 16 -f 4 apk/*-release-unsigned.apk "$RUNNER_TEMP/labx-aligned.apk"
+          "$tools"/apksigner sign --ks "$RUNNER_TEMP/labx-test.p12" --ks-pass pass:android \
+            --out "$RUNNER_TEMP/labx-test.apk" "$RUNNER_TEMP/labx-aligned.apk"
+          "$tools"/apksigner verify "$RUNNER_TEMP/labx-test.apk"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install and launch LAB X on Android
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 30
+          arch: x86_64
+          target: google_apis
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics
+          script: bash .github/scripts/android-smoke-test.sh "$RUNNER_TEMP/labx-test.apk"
