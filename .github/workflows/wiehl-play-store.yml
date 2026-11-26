@@ -1,0 +1,68 @@
+name: Wiehl Play Store Vorbereitung
+on:
+  push:
+    branches: [wiehl-play-store]
+    paths:
+      - 'wiehl/**'
+      - '.github/workflows/wiehl-play-store.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android 16 SDK
+        run: |
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}"
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Bundle pinned PeerJS client
+        run: |
+          npm pack --ignore-scripts --silent --pack-destination /tmp peerjs@1.5.5
+          tar -xOf /tmp/peerjs-1.5.5.tgz package/dist/peerjs.min.js > wiehl/app/src/main/assets/peerjs.min.js
+          tar -xOf /tmp/peerjs-1.5.5.tgz package/LICENSE > wiehl/app/src/main/assets/PeerJS-LICENSE.txt
+          test -s wiehl/app/src/main/assets/peerjs.min.js
+      - name: Check JavaScript and release assets
+        working-directory: wiehl
+        run: |
+          python3 - <<'PY'
+          import re, pathlib
+          html = pathlib.Path('app/src/main/assets/index.html').read_text(encoding='utf-8')
+          assert 'data:image/webp;base64,' not in html
+          assert 'data:image/svg+xml,' in html
+          assert 'id="privacy-info"' in html
+          for i, script in enumerate(re.findall(r'<script>(.*?)</script>', html, re.S)):
+              pathlib.Path('/tmp/wiehl-game-'+str(i)+'.js').write_text(script, encoding='utf-8')
+          PY
+          for f in /tmp/wiehl-game-*.js; do node --check "$f"; done
+          node --check app/src/main/assets/online.js
+          node --check app/src/main/assets/peerjs.min.js
+      - name: Build test APK and unsigned release bundle
+        working-directory: wiehl
+        run: gradle --no-daemon :app:assembleDebug :app:bundleRelease
+      - name: Make store graphics
+        working-directory: wiehl
+        run: |
+          python3 -m pip install --user Pillow==11.3.0
+          python3 store/make_graphics.py
+      - name: Prepare files
+        run: |
+          mkdir -p play-store-candidate
+          cp wiehl/app/build/outputs/apk/debug/app-debug.apk play-store-candidate/Wiehl-51674-Test.apk
+          cp wiehl/app/build/outputs/bundle/release/app-release.aab play-store-candidate/Wiehl-51674-UNSIGNED.aab
+          cp wiehl/store/*.md wiehl/store-assets/*.png play-store-candidate/
+          (cd play-store-candidate && sha256sum *.aab *.apk > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Wiehl-Play-Store-Vorbereitung
+          path: play-store-candidate/
+          if-no-files-found: error

@@ -19,7 +19,7 @@ function onlineUi(message) {
   }
   $('online-setup').hidden=!!net;
   $('online-room').hidden=!net;
-  $('online-button').textContent=net?'Online-Duell':'Online spielen';
+  $('online-button').textContent=net?'Online-Duell':'Online spielen (Test)';
   $('online-room-code').value=net?net.code:'';
   $('online-copy').disabled=!net||!net.code;
   $('online-leave').disabled=busy;
