@@ -1,0 +1,53 @@
+name: Tagesplan APK
+on:
+  push:
+    branches: [tagesplan-android]
+    paths:
+      - 'tagesplan/**'
+      - '.github/workflows/tagesplan-apk.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev gettext autopoint
+          python -m pip install --upgrade pip
+          python -m pip install buildozer==1.5.0 'Cython==0.29.37' pillow
+      - name: Prepare app icon and check Python
+        working-directory: tagesplan
+        run: |
+          python -m py_compile main.py
+          python - <<'PY'
+          from PIL import Image, ImageDraw
+          im = Image.new("RGB", (512,512), "#12483C")
+          d = ImageDraw.Draw(im)
+          d.rounded_rectangle((91,111,421,421), radius=42, fill="#FCFAF4")
+          d.rounded_rectangle((91,111,421,190), radius=30, fill="#B7D0BC")
+          for x in (167,345):
+              d.rounded_rectangle((x-13,78,x+13,152), radius=13, fill="#FCFAF4")
+          d.line([(163,295),(229,358),(353,230)], fill="#12483C", width=33, joint="curve")
+          im.save("icon.png")
+          PY
+      - name: Build Android APK
+        working-directory: tagesplan
+        run: buildozer android debug
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tagesplan-APK
+          path: tagesplan/bin/*.apk
+          if-no-files-found: error
