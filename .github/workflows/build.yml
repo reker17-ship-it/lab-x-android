@@ -77,3 +77,47 @@ jobs:
           name: LAB-X-unsigned-APK
           path: bin/*-release-unsigned.apk
           if-no-files-found: error
+
+  android-smoke-test:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: LAB-X-unsigned-APK
+          path: apk
+
+      - name: Sign the release APK for the emulator
+        run: |
+          tools="$ANDROID_HOME/build-tools/35.0.0"
+          if [[ ! -x "$tools/apksigner" ]]; then
+            sdkmanager 'build-tools;35.0.0'
+          fi
+          keytool -genkeypair -alias emulator -keyalg RSA -validity 2 \
+            -dname 'CN=LAB X emulator test' -storetype PKCS12 \
+            -keystore "$RUNNER_TEMP/labx-test.p12" -storepass android
+          "$tools"/zipalign -P 16 -f 4 apk/*-release-unsigned.apk "$RUNNER_TEMP/labx-aligned.apk"
+          "$tools"/apksigner sign --ks "$RUNNER_TEMP/labx-test.p12" --ks-pass pass:android \
+            --out "$RUNNER_TEMP/labx-test.apk" "$RUNNER_TEMP/labx-aligned.apk"
+          "$tools"/apksigner verify "$RUNNER_TEMP/labx-test.apk"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install and launch LAB X on Android
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 30
+          arch: x86_64
+          target: google_apis
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics
+          script: bash .github/scripts/android-smoke-test.sh "$RUNNER_TEMP/labx-test.apk"
