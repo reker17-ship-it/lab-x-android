@@ -25,7 +25,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev gettext autopoint
-          python -m pip install --upgrade pip
+          python -m pip install pip==25.3
           python -m pip install buildozer==1.5.0 'Cython==0.29.37' pillow
       - name: Prepare app icon and check Python
         working-directory: tagesplan
@@ -44,6 +44,11 @@ jobs:
           PY
       - name: Build Android APK
         working-directory: tagesplan
+        env:
+          PIP_CONSTRAINT: ${{ github.workspace }}/tagesplan/build-constraints.txt
+          PIP_DISABLE_PIP_VERSION_CHECK: '1'
+          VIRTUALENV_PIP: '25.3'
+          VIRTUALENV_NO_PERIODIC_UPDATE: '1'
         run: buildozer android debug
       - name: Upload installable APK
         uses: actions/upload-artifact@v4

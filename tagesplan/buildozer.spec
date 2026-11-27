@@ -13,7 +13,7 @@ android.permissions = android.permission.SET_ALARM,android.permission.READ_CALEN
 android.api = 35
 android.minapi = 26
 android.ndk_api = 26
-android.archs = arm64-v8a, armeabi-v7a
+android.archs = arm64-v8a
 android.accept_sdk_license = True
 android.debug_artifact = apk
 
