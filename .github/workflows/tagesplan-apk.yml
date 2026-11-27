@@ -42,17 +42,36 @@ jobs:
           d.line([(163,295),(229,358),(353,230)], fill="#12483C", width=33, joint="curve")
           im.save("icon.png")
           PY
+      - name: Prepare stable Android toolchain
+        run: |
+          git clone --depth 1 --branch v2026.05.09 https://github.com/kivy/python-for-android.git "$RUNNER_TEMP/p4a"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          p = Path(os.environ["RUNNER_TEMP"]) / "p4a/pythonforandroid/build.py"
+          s = p.read_text()
+          import re
+          s, n = re.subn(r"shprint\(host_python, '-m', 'venv', 'venv'\)", "shprint(host_python, '-m', 'venv', '--clear', 'venv')", s)
+          assert n == 1, "Expected venv creation not found"
+          s, n = re.subn(r"(?m)^([ \t]*)info\('Upgrade pip to latest version'\)\n\1shprint\(sh\.bash, '-c', \(\n\s*[\"']source venv/bin/activate && pip install -U pip[\"']\n\s*\), _env=copy\.copy\(base_env\)\)\n", "", s)
+          assert n == 1, "Expected pip upgrade not found"
+          p.write_text(s)
+          spec = Path("tagesplan/buildozer.spec")
+          s = spec.read_text()
+          s = s.replace("[app]", "[app]\np4a.source_dir = " + str(p.parent.parent), 1)
+          spec.write_text(s)
+          PY
       - name: Build Android APK
         working-directory: tagesplan
         env:
-          PIP_CONSTRAINT: ${{ github.workspace }}/tagesplan/build-constraints.txt
           PIP_DISABLE_PIP_VERSION_CHECK: '1'
-          VIRTUALENV_PIP: '25.3'
-          VIRTUALENV_NO_PERIODIC_UPDATE: '1'
-        run: buildozer android debug
+        run: |
+          buildozer android debug
+          mkdir -p apk-output
+          cp bin/*.apk apk-output/Tagesplan.apk
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
           name: Tagesplan-APK
-          path: tagesplan/bin/*.apk
+          path: tagesplan/apk-output/Tagesplan.apk
           if-no-files-found: error
