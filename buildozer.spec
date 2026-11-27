@@ -4,7 +4,7 @@ package.name = labx
 package.domain = org.reker17
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,json,wav
-version = 4.1
+version = 5.0
 requirements = python3==3.11.14,hostpython3==3.11.14,kivy,pyjnius,plyer,numpy,openssl
 orientation = portrait
 fullscreen = 0
