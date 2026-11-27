@@ -21,31 +21,31 @@ jobs:
       - name: Install Android SDK using runner tools
         run: |
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}"
-          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;35.0.0"
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
+          gradle-version: '8.11.1'
       - name: Bundle pinned PeerJS client
         run: |
           npm pack --ignore-scripts --silent --pack-destination /tmp peerjs@1.5.5
           tar -xOf /tmp/peerjs-1.5.5.tgz package/dist/peerjs.min.js > wiehl/app/src/main/assets/peerjs.min.js
           tar -xOf /tmp/peerjs-1.5.5.tgz package/LICENSE > wiehl/app/src/main/assets/PeerJS-LICENSE.txt
           test -s wiehl/app/src/main/assets/peerjs.min.js
-      - name: Verify original game JavaScript
+      - name: Verify game JavaScript
         working-directory: wiehl
         run: |
           python3 - <<'PY'
           import re, pathlib, base64
           html = pathlib.Path('app/src/main/assets/index.html').read_text(encoding='utf-8')
           assert 'ART_DATA' not in html
-          image = re.search(r'data:image/webp;base64,([A-Za-z0-9+/=]+)', html)
-          assert base64.b64decode(image.group(1), validate=True).startswith(b'RIFF')
+          assert 'data:image/svg+xml,' in html
           script = re.search(r'<script>(.*?)</script>', html, re.S).group(1)
           pathlib.Path('/tmp/wiehl-game.js').write_text(script, encoding='utf-8')
           PY
           node --check /tmp/wiehl-game.js
           node --check app/src/main/assets/online.js
           node --check app/src/main/assets/peerjs.min.js
+          node store/test-rules.cjs
       - name: Build standalone APK
         working-directory: wiehl
         run: gradle --no-daemon :app:assembleDebug

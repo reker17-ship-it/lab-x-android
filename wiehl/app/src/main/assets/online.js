@@ -19,7 +19,7 @@ function onlineUi(message) {
   }
   $('online-setup').hidden=!!net;
   $('online-room').hidden=!net;
-  $('online-button').textContent=net?'Online-Duell':'Online spielen';
+  $('online-button').textContent=net?'Online-Duell':'Online spielen (Test)';
   $('online-room-code').value=net?net.code:'';
   $('online-copy').disabled=!net||!net.code;
   $('online-leave').disabled=busy;
@@ -32,6 +32,9 @@ function showOnline(){
   if(!net){
     $('online-host-name').value=state.players[0].name;
     $('online-guest-name').value=state.players[1].name;
+    $('online-host-color').value=state.players[0].color;
+    $('online-guest-color').value=state.players[1].color;
+    $('online-duration').value=String(state.limit);
     $('online-message').textContent=introText;
   }
   onlineUi();
@@ -69,7 +72,7 @@ function send(session,packet){
   catch(_){onlineUi('Übertragung fehlgeschlagen. Prüft die Internetverbindung.');return false;}
 }
 function broadcast(session){
-  if(session?.role==='host'&&session.ready)send(session,{type:'state',version:1,state:state});
+  if(session?.role==='host'&&session.ready)send(session,{type:'state',version:2,state:state});
 }
 const localSettle=settle;
 settle=function(){
@@ -84,7 +87,7 @@ function requestMove(move){
   if(!net||net.role==='host')return nativeActions[move]();
   const session=net;
   session.pending=true;render();
-  if(!send(session,{type:'move',version:1,move})){
+  if(!send(session,{type:'move',version:2,move})){
     session.pending=false;render();
     return;
   }
@@ -93,7 +96,7 @@ function requestMove(move){
     if(net!==session||!session.pending)return;
     session.pending=false;
     onlineUi('Keine Antwort. Prüft eure Verbindung.');
-    if(session.conn)send(session,{type:'sync',version:1});
+    if(session.conn)send(session,{type:'sync',version:2});
     render();
   },12000);
 }
@@ -102,18 +105,19 @@ buy=()=>requestMove('buy');
 upgrade=()=>requestMove('upgrade');
 endTurn=()=>requestMove('endTurn');
 function validState(s){
-  return !!s&&Array.isArray(s.players)&&s.players.length===2&&s.players.every(p=>p&&typeof p.name==='string'&&p.name.length<=22&&Number.isFinite(p.money)&&Number.isInteger(p.pos)&&p.pos>=0&&p.pos<board.length)&&
+  return !!s&&Array.isArray(s.players)&&s.players.length===2&&s.players.every(p=>p&&typeof p.name==='string'&&p.name.length<=22&&isColor(p.color)&&Number.isFinite(p.money)&&Number.isInteger(p.pos)&&p.pos>=0&&p.pos<board.length)&&
     Array.isArray(s.deeds)&&s.deeds.length===board.length&&s.deeds.every(d=>d===null||((d.owner===0||d.owner===1)&&typeof d.upgraded==='boolean'))&&
-    [0,1].includes(s.active)&&Number.isInteger(s.round)&&s.round>=1&&s.round<=rounds&&['ready','buy','upgrade','end','finished'].includes(s.phase)&&
+    s.players[0].color!==s.players[1].color&&validDuration(s.limit)&&[0,1].includes(s.active)&&Number.isInteger(s.round)&&s.round>=1&&(s.limit===0||s.round<=s.limit)&&['ready','buy','upgrade','end','finished'].includes(s.phase)&&
     Array.isArray(s.deck)&&s.deck.every(x=>Number.isInteger(x)&&x>=0&&x<cards.length)&&Array.isArray(s.dice)&&s.dice.every(x=>Number.isInteger(x)&&x>=1&&x<=6)&&
     typeof s.headline==='string'&&typeof s.message==='string'&&Array.isArray(s.log)&&s.log.every(x=>typeof x==='string');
 }
 function receive(session,packet){
-  if(net!==session||!packet||packet.version!==1)return;
+  if(net!==session||!packet||packet.version!==2)return;
   if(session.role==='host'){
     if(packet.type==='hello'&&!session.ready){
       if(!session.started){
         state.players[1].name=typeof packet.name==='string'?packet.name.trim().slice(0,22)||'Spieler 2':'Spieler 2';
+        state.players[1].color=isColor(packet.color)&&packet.color!==state.players[0].color?packet.color:freeColor(state.players[0].color);
         session.started=true;
       }
       session.ready=true;
@@ -129,7 +133,7 @@ function receive(session,packet){
   }else if(packet.type==='state'&&validState(packet.state)){
     state=packet.state;selected=state.players[state.active].pos;
     session.ready=true;session.pending=false;clearTimeout(session.moveTimer);
-    onlineUi('Mit '+state.players[0].name+' verbunden');
+    onlineUi('Mit '+state.players[0].name+' verbunden · dein Kegel: '+pawnNames[state.players[1].color]);
     render();
     if(onlineDialog.open)onlineDialog.close();
   }
@@ -149,7 +153,7 @@ function attach(session,conn){
   conn.on('open',()=>{
     if(net!==session||session.conn!==conn)return;
     onlineUi('Spielstand wird abgeglichen …');
-    if(session.role==='guest')send(session,{type:'hello',version:1,name:session.name});
+    if(session.role==='guest')send(session,{type:'hello',version:2,name:session.name,color:session.color});
     render();
   });
   conn.on('data',packet=>{
@@ -187,11 +191,13 @@ function startOnline(role){
     onlineUi('Bitte den zehnstelligen Spielcode eingeben.');return;
   }
   const session={role,code,name:nameOf(role==='host'?'online-host-name':'online-guest-name',role==='host'?'Spieler 1':'Spieler 2'),
+    color:$(role==='host'?'online-host-color':'online-guest-color').value,limit:Number($('online-duration').value),
     previous:state,previousSelected:selected,ready:false,pending:false,started:false,peer:null,conn:null};
+  if(!isColor(session.color)||!validDuration(session.limit))return;
   net=session;
-  state=fresh(role==='host'?[session.name,'Spieler 2']:['Spieler 1',session.name]);selected=0;
+  state=fresh(role==='host'?[session.name,'Spieler 2']:['Spieler 1',session.name],role==='host'?[session.color,freeColor(session.color)]:[freeColor(session.color),session.color],session.limit);selected=0;
   onlineUi('Verbindung zum Spieldienst wird aufgebaut …');render();
-  const hostId='wiehl-v1-'+code;
+  const hostId='wiehl-v2-'+code;
   try{
     session.peer=role==='host'?new PeerClass(hostId,{secure:true}):new PeerClass({secure:true});
   }catch(_){exitOnline('Verbindung konnte nicht gestartet werden.');return;}

@@ -1,0 +1,20 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs'),vm=require('node:vm');
+const html=fs.readFileSync('app/src/main/assets/index.html','utf8');
+const script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
+const ctx=vm.createContext({assert,localStorage:{getItem:()=>null,setItem:()=>{}},matchMedia:()=>({matches:true})});
+vm.runInContext(script.slice(0,script.indexOf('function openNew()')),ctx);
+vm.runInContext(`
+render=()=>{};
+state=fresh(['A','B'],['yellow','green'],20);
+assert.equal(state.players[0].color,'yellow');assert.equal(state.limit,20);
+assert.equal(accent(1),pawnColors.green);
+state.round=19;state.active=1;state.phase='end';endTurn();
+assert.equal(state.round,20);assert.equal(state.phase,'ready');
+state.active=1;state.phase='end';endTurn();assert.equal(state.phase,'finished');
+state=fresh(['A','B'],['blue','red'],1);state.active=1;state.phase='end';endTurn();assert.equal(state.phase,'finished');
+state=fresh(['A','B'],['green','yellow'],0);state.round=21;state.active=1;state.phase='end';endTurn();assert.equal(state.round,22);
+state.players[1].money=0;settle();assert.equal(state.phase,'finished');assert.equal(state.headline,'A gewinnt');
+state=fresh(['A','B'],['blue','red'],5);state.players[0].money=0;settle();assert.equal(state.phase,'ready');
+`,ctx);
+console.log('PASS: colors, 1 and 20 rounds, unlimited mode, bankruptcy');
