@@ -412,4 +412,365 @@ class GlobalLab(Omega):
     def on_pause(self):self.monitor=False;return super().on_pause()
     def on_stop(self):self.monitor=False;super().on_stop()
 
-if __name__=='__main__': GlobalLab().run()
+
+# LAB X 5.0: native Android permissions, GPS and verified headphone routing.
+from kivy.uix.gridlayout import GridLayout
+from kivy.utils import platform
+
+class LiveLab(GlobalLab):
+    HEADSET_TYPES = (3, 4, 8, 22, 26)  # wired, A2DP, USB headset, BLE headset
+
+    def build(self):
+        self.location_manager = None
+        self.location_listener = None
+        self.gps_provider = ''
+        self.gps_start_time = 0
+        self.route_text = 'Aus'
+        self.route_wait = 0
+        self.permission_pending = False
+        self.mean_history = deque(maxlen=300)
+        self.last_selected = ''
+        root = super().build()
+        root.padding = dp(8)
+        root.spacing = dp(4)
+        for w in root.children:
+            if isinstance(w, Label) and 'LAB X' in w.text:
+                w.text = 'LAB X  /  LIVE 5.0'
+                w.font_size = '22sp'
+            if isinstance(w, BoxLayout):
+                w.height = dp(44)
+                for b in w.children:
+                    if isinstance(b, Button):
+                        b.font_size = '12sp'
+                        b.bind(size=lambda obj, size: setattr(obj, 'text_size', (max(dp(1),size[0]-dp(8)),None)))
+                        b.halign = 'center'
+                        b.valign = 'middle'
+        self.readout.font_size = '32sp'
+        self.stats.font_size = '13sp'
+        self.detail.font_size = '12sp'
+        self.detail.bind(size=lambda obj,size:setattr(obj,'text_size',(size[0],None)))
+        self.detail.halign = 'center'
+        self.graph.size_hint_min_y = dp(125)
+        self.status.font_size = '12sp'
+        Clock.unschedule(self.update)
+        Clock.schedule_interval(self.update, .1)
+        # Keep the instrument usable on compact screens as well as tablets.
+        scroll = ScrollView(do_scroll_x=False)
+        root.size_hint_y = None
+        def resize(*args):
+            fixed = sum(w.height for w in root.children if w is not self.graph)
+            root.height = max(scroll.height, fixed + dp(155) + 2*dp(8) + (len(root.children)-1)*dp(4))
+        scroll.bind(size=resize)
+        scroll.add_widget(root)
+        resize()
+        return scroll
+
+    def permissions(self, names, fn):
+        if not hasattr(self,'ctx'):
+            self.message('Android', 'Nur in der Android-App verfügbar.')
+            return
+        if self.permission_pending:
+            return
+        def allowed():
+            grants = {n:self.ctx.checkSelfPermission(n)==0 for n in names}
+            if 'android.permission.ACCESS_COARSE_LOCATION' in grants:
+                return any(grants.values())
+            return all(grants.values())
+        try:
+            if allowed():
+                fn()
+                return
+            from android.permissions import request_permissions
+            self.permission_pending = True
+            def result(*args):
+                def finish(dt):
+                    self.permission_pending = False
+                    if allowed():
+                        fn()
+                    else:
+                        self.monitor = False
+                        self.route_text = 'Berechtigung fehlt'
+                        self.message('Berechtigung', 'Bitte in den Android-App-Einstellungen für LAB X erlauben.')
+                Clock.schedule_once(finish,0)
+            request_permissions(names,result)
+        except Exception as e:
+            self.permission_pending = False
+            self.monitor = False
+            self.message('Berechtigung',str(e))
+
+    def reset(self,*args):
+        super().reset(*args)
+        if hasattr(self,'mean_history'):
+            self.mean_history.clear()
+
+    def update(self,dt):
+        super().update(dt)
+        if self.paused:
+            return
+        n=self.selector.text
+        if self.history and n in self.values:
+            val=self.history[-1]
+            self.mean_history.append(val)
+            avg=sum(self.mean_history)/len(self.mean_history)
+            self.stats.text=f'MIN {self.low:.3f}  |  MAX {self.high:.3f}\nØ {avg:.3f}  |  {len(self.mean_history)} Werte / 10 Hz Anzeige'
+        else:
+            self.readout.color=(.3,1,.75,1)
+        if n.startswith('GPS '):
+            age=time.monotonic()-self.gps_time if self.gps_time else None
+            self.status.text=('GPS AUS' if not self.gps_active else 'GPS | Warte auf Fix' if age is None or age>20 else f'{self.gps_provider.upper()} | Fix vor {age:.1f} s')+(' | CSV aktiv' if self.file else '')
+        if n.startswith('Mikrofon') or n=='Tonfrequenz':
+            if self.monitor:
+                self.status.text='AUDIO | '+self.route_text
+
+    def toggle_gps(self,*args):
+        box=BoxLayout(orientation='vertical',padding=dp(12),spacing=dp(6))
+        info=Label(text='',halign='left',valign='middle')
+        info.bind(size=lambda obj,size:setattr(obj,'text_size',size))
+        box.add_widget(info)
+        b=Button(text='GPS START / STOPP',size_hint_y=None,height=dp(48))
+        box.add_widget(b)
+        def toggle(*a):
+            if self.gps_active:self.stop_gps()
+            else:self.permissions(['android.permission.ACCESS_FINE_LOCATION','android.permission.ACCESS_COARSE_LOCATION'],self.start_gps)
+        b.bind(on_release=toggle)
+        p=Popup(title='GPS / Live-Navigation',content=box,size_hint=(.96,.85))
+        def refresh(dt):
+            age=time.monotonic()-self.gps_time if self.gps_time else None
+            lines=['GPS '+('AKTIV' if self.gps_active else 'AUS'),
+                   'Quelle: '+(self.gps_provider or 'Warte auf Standort'),
+                   'Letzter Fix: '+(f'{age:.1f} s' if age is not None else 'kein Fix')]
+            for n,u in [('Breite','°'),('Länge','°'),('Höhe','m'),('Tempo','km/h'),('Genauigkeit','m'),('Kurs','°')]:
+                v=self.values.get('GPS '+n)
+                lines.append(n+': '+(f'{v[0]:.6f} {u}' if v and n in ('Breite','Länge') else f'{v[0]:.1f} {u}' if v else '—'))
+            lines.append('Standort bleibt lokal, außer bei ausdrücklich gewählten Online-Daten.')
+            info.text='\n'.join(lines)
+            b.text='GPS STOPP' if self.gps_active else 'GPS START'
+        refresh(0)
+        ev=Clock.schedule_interval(refresh,.25)
+        p.bind(on_dismiss=lambda *a:ev.cancel())
+        p.open()
+
+    def start_gps(self):
+        if self.gps_active:return
+        try:
+            from jnius import PythonJavaClass, java_method
+            owner=self
+            class LocationListener(PythonJavaClass):
+                __javainterfaces__=['android/location/LocationListener']
+                __javacontext__='app'
+                @java_method('(Landroid/location/Location;)V')
+                def onLocationChanged(self,loc):
+                    try:
+                        data={'lat':loc.getLatitude(),'lon':loc.getLongitude()}
+                        for key,has,get in [('altitude','hasAltitude','getAltitude'),('speed','hasSpeed','getSpeed'),('accuracy','hasAccuracy','getAccuracy'),('bearing','hasBearing','getBearing')]:
+                            if getattr(loc,has)():data[key]=getattr(loc,get)()
+                        provider=str(loc.getProvider())
+                        elapsed=loc.getElapsedRealtimeNanos()
+                        age=max(0,(owner.ac('android.os.SystemClock').elapsedRealtimeNanos()-elapsed)/1e9)
+                        def apply(dt):
+                            if owner.gps_active and age<=20:
+                                owner.gps_provider=provider
+                                owner.location(**data)
+                                owner.gps_time=time.monotonic()-age
+                        Clock.schedule_once(apply,0)
+                    except Exception:pass
+                @java_method('(Ljava/lang/String;ILandroid/os/Bundle;)V')
+                def onStatusChanged(self,provider,status,extras):pass
+                @java_method('(Ljava/lang/String;)V')
+                def onProviderEnabled(self,provider):pass
+                @java_method('(Ljava/lang/String;)V')
+                def onProviderDisabled(self,provider):pass
+            self.location_manager=self.ctx.getSystemService('location')
+            self.location_listener=LocationListener()
+            fine=self.ctx.checkSelfPermission('android.permission.ACCESS_FINE_LOCATION')==0
+            providers=['gps','network'] if fine else ['network']
+            looper=self.ac('android.os.Looper').getMainLooper()
+            count=0
+            self.gps_active=True
+            self.gps_start_time=time.monotonic()
+            for provider in providers:
+                try:
+                    if self.location_manager.isProviderEnabled(provider):
+                        self.location_manager.requestLocationUpdates(provider,1000,0.0,self.location_listener,looper)
+                        count+=1
+                except Exception:pass
+            if not count:
+                self.stop_gps()
+                self.message('GPS','Standort in Android einschalten und LAB X Zugriff erlauben.')
+            else:
+                self.selector.text='GPS Genauigkeit'
+        except Exception as e:
+            self.stop_gps()
+            self.message('GPS',str(e))
+
+    def stop_gps(self):
+        self.gps_active=False
+        if self.location_manager is not None and self.location_listener is not None:
+            try:self.location_manager.removeUpdates(self.location_listener)
+            except Exception:pass
+        self.location_listener=None
+        self.location_manager=None
+        self.gps_time=0
+        self.gps_provider=''
+        for n in EXTRA:
+            if n.startswith('GPS '):self.values.pop(n,None)
+
+    def headphone_device(self):
+        try:
+            devices=self.ctx.getSystemService('audio').getDevices(2)
+            matches=[d for d in devices if d.getType() in self.HEADSET_TYPES]
+            return next((d for d in matches if d.getType() in (8,26)),matches[0] if matches else None)
+        except Exception:return None
+
+    def headphones(self):
+        return self.headphone_device() is not None
+
+    def audio_menu(self,*args):
+        box=BoxLayout(orientation='vertical',padding=dp(12),spacing=dp(8))
+        status=Label(text='',halign='center')
+        status.bind(size=lambda obj,size:setattr(obj,'text_size',size))
+        box.add_widget(status)
+        gain_label=Label(text=f'Verstärkung: {self.gain:.1f}x',size_hint_y=None,height=dp(32))
+        box.add_widget(gain_label)
+        slider=Slider(min=.5,max=4,step=.25,value=min(4,self.gain),size_hint_y=None,height=dp(48))
+        box.add_widget(slider)
+        def gain(w,v):
+            self.gain=v
+            gain_label.text=f'Verstärkung: {v:.2f}x'
+        slider.bind(value=gain)
+        filt=Button(text='Hochpass: '+('AN' if self.highpass else 'AUS'),size_hint_y=None,height=dp(45))
+        box.add_widget(filt)
+        def filter_toggle(*a):
+            self.highpass=not self.highpass
+            filt.text='Hochpass: '+('AN' if self.highpass else 'AUS')
+        filt.bind(on_release=filter_toggle)
+        toggle=Button(text='Verstärker START',size_hint_y=None,height=dp(52))
+        box.add_widget(toggle)
+        def start(*a):
+            if self.monitor:
+                self.monitor=False
+                self.route_text='Aus'
+                return
+            if not self.headphones():
+                self.message('Audio','Bluetooth-Kopfhörer in Android verbinden und Medienaudio aktivieren, oder Kabel-/USB-Kopfhörer anschließen.')
+                return
+            def permitted():
+                if not self.headphones():return
+                if self.audio_thread and self.audio_thread.is_alive() and not self.audio_running:
+                    self.message('Audio','Mikrofon wird beendet. Bitte erneut starten.')
+                    return
+                self.gain=1.
+                slider.value=1.
+                self.route_text='Prüfe Audio-Ausgang'
+                self.monitor=True
+                if not self.audio_running:self.start_audio()
+            self.permissions(['android.permission.RECORD_AUDIO'],permitted)
+        toggle.bind(on_release=start)
+        p=Popup(title='AUDIO / Live-Verstärker',content=box,size_hint=(.96,.82))
+        def refresh(dt):
+            d=self.headphone_device()
+            name='Kein Kopfhörer verbunden'
+            if d is not None:
+                try:name=str(d.getProductName())
+                except Exception:name='Kopfhörer'
+            rms=self.values.get('Mikrofon RMS')
+            status.text=f'{name}\n{self.route_text}\nPegel: '+(f'{rms[0]:.1f} dBFS' if rms else '—')+'\n\nLeise beginnen. Bluetooth hat eine systembedingte Verzögerung. Keine kalibrierte Hörhilfe.'
+            toggle.text='Verstärker STOPP' if self.monitor else 'Verstärker START'
+        refresh(0)
+        ev=Clock.schedule_interval(refresh,.2)
+        p.bind(on_dismiss=lambda *a:ev.cancel())
+        p.open()
+
+    def close_monitor(self):
+        if self.track is not None:
+            try:self.track.setVolume(0.)
+            except Exception:pass
+        super().close_monitor()
+        self.route_wait=0
+
+    def monitor_samples(self,a,rate):
+        # Called only by the microphone worker. Start muted and verify the actual
+        # Android route, not just the presence of a paired Bluetooth device.
+        if not self.monitor:
+            self.close_monitor()
+            return
+        try:
+            target=self.headphone_device()
+            if target is None:raise RuntimeError('Kopfhörer getrennt')
+            if self.track is None:
+                T=self.ac('android.media.AudioTrack')
+                size=T.getMinBufferSize(rate,4,2)
+                if size<=0:raise RuntimeError('Audio-Ausgabeformat nicht unterstützt')
+                self.track=T(3,rate,4,2,max(size,4096),1)
+                if self.track.getState()!=1:raise RuntimeError('AudioTrack nicht bereit')
+                self.track.setVolume(0.)
+                if not self.track.setPreferredDevice(target):raise RuntimeError('Android lehnt Audio-Ausgang ab')
+                self.track.play()
+                self.route_wait=time.monotonic()
+                self.prev_x=self.prev_y=0.
+            routed=self.track.getRoutedDevice()
+            if routed is None or routed.getId()!=target.getId() or routed.getType() not in self.HEADSET_TYPES:
+                self.track.setVolume(0.)
+                self.route_text='Prüfe Kopfhörer-Route (stumm)'
+                if time.monotonic()-self.route_wait>3:raise RuntimeError('Kopfhörer-Ausgabe nicht bestätigt. Medienaudio in Android prüfen.')
+                silence=bytearray(len(a)*2)
+                self.track.write(silence,0,len(silence))
+                return
+            self.track.setVolume(.12)
+            self.route_text='Bluetooth LIVE' if routed.getType() in (8,26) else 'Kopfhörer LIVE'
+            self.route_wait=time.monotonic()
+            out=[]
+            for x in a:
+                y=.96*(self.prev_y+x-self.prev_x)
+                self.prev_x=x
+                self.prev_y=y
+                out.append(int(9500*math.tanh((y if self.highpass else x)*self.gain/9500)))
+            buf=bytearray(struct.pack('<'+'h'*len(out),*out))
+            if self.track.write(buf,0,len(buf))<0:raise RuntimeError('Audio-Ausgabefehler')
+        except Exception as e:
+            self.monitor=False
+            self.route_text=str(e)
+            self.close_monitor()
+
+    def dashboard(self,*args):
+        panel=BoxLayout(orientation='vertical',padding=dp(8),spacing=dp(5))
+        search=TextInput(hint_text='Sensor suchen ...',multiline=False,size_hint_y=None,height=dp(46))
+        panel.add_widget(search)
+        scroll=ScrollView()
+        grid=GridLayout(cols=1,size_hint_y=None,spacing=dp(5))
+        grid.bind(minimum_height=grid.setter('height'))
+        scroll.add_widget(grid)
+        panel.add_widget(scroll)
+        p=Popup(title='LAB X / Live-Messinstrumente',content=panel,size_hint=(.98,.96))
+        labels={}
+        for n in self.units:
+            b=Button(text=n,size_hint_y=None,height=dp(52),font_size='13sp',background_normal='',background_color=(.08,.23,.28,1))
+            b.bind(on_release=lambda w,n=n:(setattr(self.selector,'text',n),p.dismiss()))
+            labels[n]=b
+        def filter_list(*a):
+            grid.clear_widgets()
+            for n,b in labels.items():
+                if search.text.casefold() in n.casefold():grid.add_widget(b)
+        search.bind(text=filter_list)
+        def refresh(dt):
+            for n,b in labels.items():
+                v=self.values.get(n)
+                b.text=n+'\n'+(f'{self.scalar(v):.3f} {self.units[n]}' if v else 'Keine Daten')
+                b.color=(.3,1,.75,1) if v else (.65,.72,.75,1)
+        filter_list()
+        refresh(0)
+        ev=Clock.schedule_interval(refresh,.25)
+        p.bind(on_dismiss=lambda *a:ev.cancel())
+        p.open()
+
+    def on_pause(self):
+        self.monitor=False
+        self.route_text='Aus'
+        return super().on_pause()
+
+    def on_stop(self):
+        self.monitor=False
+        super().on_stop()
+
+if __name__=='__main__':
+    LiveLab().run()
